@@ -144,6 +144,7 @@ def py_rmsle(dtrain: xgb.DMatrix, dtest: xgb.DMatrix) -> Dict:
         return 'PyRMSLE', float(np.sqrt(np.sum(elements) / len(y)))
 
     results: Dict[str, Dict[str, List[float]]] = {}
+    start = time()
     xgb.train({'tree_method': 'gpu_hist', 'seed': kSeed,
                'disable_default_eval_metric': 1},
               dtrain=dtrain,
@@ -152,7 +153,7 @@ def py_rmsle(dtrain: xgb.DMatrix, dtest: xgb.DMatrix) -> Dict:
               custom_metric=rmsle,
               evals=[(dtrain, 'dtrain'), (dtest, 'dtest')],
               evals_result=results)
-
+    print('Finished Squared Log Error in:', time() - start)
     return results
 
 
