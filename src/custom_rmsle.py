@@ -72,7 +72,7 @@ def native_rmse(dtrain: xgb.DMatrix,
     squared_error = {
         'objective': 'reg:squarederror',
         'eval_metric': 'rmse',
-        'tree_method': 'hist',
+        'tree_method': 'gpu_hist',
         'seed': kSeed
     }
     start = time()
@@ -94,7 +94,7 @@ def native_rmsle(dtrain: xgb.DMatrix,
     squared_log_error = {
         'objective': 'reg:squaredlogerror',
         'eval_metric': 'rmsle',
-        'tree_method': 'hist',
+        'tree_method': 'gpu_hist',
         'seed': kSeed
     }
     start = time()
@@ -144,7 +144,7 @@ def py_rmsle(dtrain: xgb.DMatrix, dtest: xgb.DMatrix) -> Dict:
         return 'PyRMSLE', float(np.sqrt(np.sum(elements) / len(y)))
 
     results: Dict[str, Dict[str, List[float]]] = {}
-    xgb.train({'tree_method': 'hist', 'seed': kSeed,
+    xgb.train({'tree_method': 'gpu_hist', 'seed': kSeed,
                'disable_default_eval_metric': 1},
               dtrain=dtrain,
               num_boost_round=kBoostRound,
