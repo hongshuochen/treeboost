@@ -3,8 +3,8 @@ Demo for defining a custom regression objective and metric
 ==========================================================
 
 Demo for defining customized metric and objective.  Notice that for simplicity reason
-weight is not used in following example. In this script, we implement the Squared Log
-Error (SLE) objective and RMSLE metric as customized functions, then compare it with
+weight is not used in following example. In this script, we implement the Logistic Regression
+objective and logloss metric as customized functions, then compare it with
 native implementation in XGBoost.
 
 See :doc:`/tutorials/custom_metric_obj` for a step by step walkthrough, with other
@@ -21,180 +21,105 @@ from typing import Dict, List, Tuple
 import matplotlib
 import numpy as np
 from matplotlib import pyplot as plt
+from sklearn.datasets import load_breast_cancer
 
 import xgboost as xgb
-
-# shape of generated data.
-kRows = 4096
-kCols = 16
-
-kOutlier = 10000                # mean of generated outliers
-kNumberOfOutliers = 64
 
 kRatio = 0.7
 kSeed = 1994
 
-kBoostRound = 20
+kBoostRound = 100
 
 np.random.seed(seed=kSeed)
 
-
-def generate_data() -> Tuple[xgb.DMatrix, xgb.DMatrix]:
-    '''Generate data containing outliers.'''
-    x = np.random.randn(kRows, kCols)
-    y = np.random.randn(kRows)
-    y += np.abs(np.min(y))
-
-    # Create outliers
-    for i in range(0, kNumberOfOutliers):
-        ind = np.random.randint(0, len(y)-1)
-        y[ind] += np.random.randint(0, kOutlier)
-
-    train_portion = int(kRows * kRatio)
-
-    # rmsle requires all label be greater than -1.
-    assert np.all(y > -1.0)
-
-    train_x: np.ndarray = x[: train_portion]
-    train_y: np.ndarray = y[: train_portion]
-    dtrain = xgb.DMatrix(train_x, label=train_y)
-
-    test_x = x[train_portion:]
-    test_y = y[train_portion:]
-    dtest = xgb.DMatrix(test_x, label=test_y)
-    return dtrain, dtest
-
-
-def native_rmse(dtrain: xgb.DMatrix,
-                dtest: xgb.DMatrix) -> Dict[str, Dict[str, List[float]]]:
-    '''Train using native implementation of Root Mean Squared Loss.'''
-    print('Squared Error')
-    squared_error = {
-        'objective': 'reg:squarederror',
-        'eval_metric': 'rmse',
-        'tree_method': 'hist',
-        'seed': kSeed
-    }
-    start = time()
-    results: Dict[str, Dict[str, List[float]]] = {}
-    xgb.train(squared_error,
-              dtrain=dtrain,
-              num_boost_round=kBoostRound,
-              evals=[(dtrain, 'dtrain'), (dtest, 'dtest')],
-              evals_result=results)
-    print('Finished Squared Error in:', time() - start, '\n')
-    return results
-
-
-def native_rmsle(dtrain: xgb.DMatrix,
+def native_logistic(dtrain: xgb.DMatrix,
                  dtest: xgb.DMatrix) -> Dict[str, Dict[str, List[float]]]:
-    '''Train using native implementation of Squared Log Error.'''
-    print('Squared Log Error')
+    '''Train using native implementation of Logistic Regression.'''
+    print('Logistic Regression')
     results: Dict[str, Dict[str, List[float]]] = {}
-    squared_log_error = {
-        'objective': 'reg:squaredlogerror',
-        'eval_metric': 'rmsle',
-        'tree_method': 'hist',
-        'seed': kSeed
+    logistic = {
+        'objective': 'binary:logistic',
+        'eval_metric': 'logloss',
+        'tree_method': 'gpu_hist',
+        'seed': kSeed,
+        'max_depth': 6
     }
     start = time()
-    xgb.train(squared_log_error,
+    xgb.train(logistic,
               dtrain=dtrain,
               num_boost_round=kBoostRound,
               evals=[(dtrain, 'dtrain'), (dtest, 'dtest')],
               evals_result=results)
-    print('Finished Squared Log Error in:', time() - start)
+    print('Finished Logistic Regression in:', time() - start)
     return results
 
 
-def py_rmsle(dtrain: xgb.DMatrix, dtest: xgb.DMatrix) -> Dict:
-    '''Train using Python implementation of Squared Log Error.'''
+def py_logistic(dtrain: xgb.DMatrix, dtest: xgb.DMatrix) -> Dict:
+    '''Train using Python implementation of Logistic Regression.'''
     def gradient(predt: np.ndarray, dtrain: xgb.DMatrix) -> np.ndarray:
-        '''Compute the gradient squared log error.'''
+        '''Compute the gradient for logistic regression.'''
         y = dtrain.get_label()
-        return (np.log1p(predt) - np.log1p(y)) / (predt + 1)
+        return predt - y
 
     def hessian(predt: np.ndarray, dtrain: xgb.DMatrix) -> np.ndarray:
-        '''Compute the hessian for squared log error.'''
-        y = dtrain.get_label()
-        return ((-np.log1p(predt) + np.log1p(y) + 1) /
-                np.power(predt + 1, 2))
+        '''Compute the hessian for logistic regression.'''
+        return predt * (1.0 - predt)
 
-    def squared_log(predt: np.ndarray,
+    def logistic(predt: np.ndarray,
                     dtrain: xgb.DMatrix) -> Tuple[np.ndarray, np.ndarray]:
-        '''Squared Log Error objective. A simplified version for RMSLE used as
+        '''Logistic Regression objective. A simplified version for logistic used as
         objective function.
 
-        :math:`\frac{1}{2}[log(pred + 1) - log(label + 1)]^2`
+        # :math:`\frac{1}{2}[log(pred + 1) - log(label + 1)]^2`
 
         '''
-        predt[predt < -1] = -1 + 1e-6
+        predt = 1.0 / (1.0 + np.exp(-predt))
         grad = gradient(predt, dtrain)
         hess = hessian(predt, dtrain)
         return grad, hess
 
-    def rmsle(predt: np.ndarray, dtrain: xgb.DMatrix) -> Tuple[str, float]:
-        ''' Root mean squared log error metric.
-
-        :math:`\sqrt{\frac{1}{N}[log(pred + 1) - log(label + 1)]^2}`
-        '''
+    def logloss(predt: np.ndarray, dtrain: xgb.DMatrix) -> Tuple[str, float]:
         y = dtrain.get_label()
-        predt[predt < -1] = -1 + 1e-6
-        elements = np.power(np.log1p(y) - np.log1p(predt), 2)
-        return 'PyRMSLE', float(np.sqrt(np.sum(elements) / len(y)))
+        predt = 1.0 / (1.0 + np.exp(-predt))
+        return 'Pylogloss', -float(np.mean(y*np.log(predt) + (1-y)*np.log(1-predt)))
+
+    def evalerror(preds, dtrain):
+        labels = dtrain.get_label()
+        # return a pair metric_name, result. The metric name must not contain a
+        # colon (:) or a space since preds are margin(before logistic
+        # transformation, cutoff at 0)
+        return 'my-error', float(sum(labels != (preds > 0.0))) / len(labels)
 
     results: Dict[str, Dict[str, List[float]]] = {}
-    xgb.train({'tree_method': 'hist', 'seed': kSeed,
+    start = time()
+    xgb.train({'tree_method': 'gpu_hist', 'seed': kSeed, 'max_depth': 6, 'base_score': 0,
                'disable_default_eval_metric': 1},
               dtrain=dtrain,
               num_boost_round=kBoostRound,
-              obj=squared_log,
-              custom_metric=rmsle,
+              obj=logistic,
+              custom_metric=logloss,
               evals=[(dtrain, 'dtrain'), (dtest, 'dtest')],
               evals_result=results)
-
+    print('Finished Logistic Regression in:', time() - start)
     return results
 
-
-def plot_history(rmse_evals, rmsle_evals, py_rmsle_evals):
-    fig, axs = plt.subplots(3, 1)
-    ax0: matplotlib.axes.Axes = axs[0]
-    ax1: matplotlib.axes.Axes = axs[1]
-    ax2: matplotlib.axes.Axes = axs[2]
-
-    x = np.arange(0, kBoostRound, 1)
-
-    ax0.plot(x, rmse_evals['dtrain']['rmse'], label='train-RMSE')
-    ax0.plot(x, rmse_evals['dtest']['rmse'], label='test-RMSE')
-    ax0.legend()
-
-    ax1.plot(x, rmsle_evals['dtrain']['rmsle'], label='train-native-RMSLE')
-    ax1.plot(x, rmsle_evals['dtest']['rmsle'], label='test-native-RMSLE')
-    ax1.legend()
-
-    ax2.plot(x, py_rmsle_evals['dtrain']['PyRMSLE'], label='train-PyRMSLE')
-    ax2.plot(x, py_rmsle_evals['dtest']['PyRMSLE'], label='test-PyRMSLE')
-    ax2.legend()
-
-
 def main(args):
-    dtrain, dtest = generate_data()
-    rmse_evals = native_rmse(dtrain, dtest)
-    rmsle_evals = native_rmsle(dtrain, dtest)
-    py_rmsle_evals = py_rmsle(dtrain, dtest)
-
-    if args.plot != 0:
-        plot_history(rmse_evals, rmsle_evals, py_rmsle_evals)
-        plt.show()
+    X, y = load_breast_cancer(return_X_y=True)
+    # shuffle and split training and test sets
+    idx = np.arange(X.shape[0])
+    np.random.shuffle(idx)
+    X, y = X[idx], y[idx]
+    train_size = int(X.shape[0] * kRatio)
+    X_train, y_train = X[:train_size], y[:train_size]
+    X_test, y_test = X[train_size:], y[train_size:]
+    dtrain = xgb.DMatrix(X_train, label=y_train)
+    dtest = xgb.DMatrix(X_test, label=y_test)
+    logistic_evals = native_logistic(dtrain, dtest)
+    py_logistic_evals = py_logistic(dtrain, dtest)
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
-        description='Arguments for custom RMSLE objective function demo.')
-    parser.add_argument(
-        '--plot',
-        type=int,
-        default=1,
-        help='Set to 0 to disable plotting the evaluation history.')
+        description='Arguments for custom logistic objective function demo.')
     args = parser.parse_args()
     main(args)
